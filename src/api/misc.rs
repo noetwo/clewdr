@@ -273,10 +273,6 @@ fn fallback_models() -> Vec<AvailableModel> {
         .collect()
 }
 
-fn keep_legacy_thinking_alias(model: &str) -> bool {
-    matches!(model, "claude-sonnet-4-6" | "claude-opus-4-6")
-}
-
 fn models_response(mut models: Vec<AvailableModel>) -> Value {
     if models.is_empty() {
         models = fallback_models();
@@ -293,14 +289,7 @@ fn models_response(mut models: Vec<AvailableModel>) -> Value {
         if !seen.insert(model.id.clone()) {
             continue;
         }
-        let base_id = model.id.clone();
         data.push(model.openai_value());
-        if keep_legacy_thinking_alias(&base_id) {
-            let mut alias = model.openai_value();
-            alias["id"] = json!(format!("{base_id}-thinking"));
-            alias["clewdr_alias_for"] = json!(base_id);
-            data.push(alias);
-        }
     }
 
     json!({
@@ -368,6 +357,27 @@ pub async fn api_get_code_models(State(handle): State<CookieActorHandle>) -> Jso
     let response = models_response(models);
     MODELS_CACHE.insert(CODE_MODELS_CACHE_KEY.to_string(), response.clone());
     Json(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_list_does_not_synthesize_thinking_aliases() {
+        let response = models_response(vec![AvailableModel {
+            id: "claude-opus-4-6".into(),
+            ..Default::default()
+        }]);
+        let ids = response["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|model| model["id"].as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec!["claude-opus-4-6"]);
+    }
 }
 
 // ------------------------------
