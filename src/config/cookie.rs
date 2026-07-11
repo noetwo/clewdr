@@ -23,6 +23,7 @@ use crate::{
 pub enum ModelFamily {
     Sonnet,
     Opus,
+    Fable,
     Other,
 }
 
@@ -67,8 +68,8 @@ pub struct CookieStatus {
     pub session_usage: UsageBreakdown,
     #[serde(default)]
     pub weekly_usage: UsageBreakdown,
-    #[serde(default)]
-    pub weekly_sonnet_usage: UsageBreakdown,
+    #[serde(default, alias = "weekly_sonnet_usage")]
+    pub weekly_model_usage: UsageBreakdown,
     #[serde(default)]
     pub weekly_opus_usage: UsageBreakdown,
     #[serde(default)]
@@ -79,8 +80,8 @@ pub struct CookieStatus {
     pub session_resets_at: Option<i64>,
     #[serde(default)]
     pub weekly_resets_at: Option<i64>,
-    #[serde(default)]
-    pub weekly_sonnet_resets_at: Option<i64>,
+    #[serde(default, alias = "weekly_sonnet_resets_at")]
+    pub weekly_model_resets_at: Option<i64>,
     #[serde(default)]
     pub weekly_opus_resets_at: Option<i64>,
 
@@ -94,8 +95,8 @@ pub struct CookieStatus {
     pub session_has_reset: Option<bool>,
     #[serde(default)]
     pub weekly_has_reset: Option<bool>,
-    #[serde(default)]
-    pub weekly_sonnet_has_reset: Option<bool>,
+    #[serde(default, alias = "weekly_sonnet_has_reset")]
+    pub weekly_model_has_reset: Option<bool>,
     #[serde(default)]
     pub weekly_opus_has_reset: Option<bool>,
 }
@@ -145,17 +146,17 @@ impl CookieStatus {
 
             session_usage: UsageBreakdown::default(),
             weekly_usage: UsageBreakdown::default(),
-            weekly_sonnet_usage: UsageBreakdown::default(),
+            weekly_model_usage: UsageBreakdown::default(),
             weekly_opus_usage: UsageBreakdown::default(),
             lifetime_usage: UsageBreakdown::default(),
             session_resets_at: None,
             weekly_resets_at: None,
-            weekly_sonnet_resets_at: None,
+            weekly_model_resets_at: None,
             weekly_opus_resets_at: None,
             resets_last_checked_at: None,
             session_has_reset: None,
             weekly_has_reset: None,
-            weekly_sonnet_has_reset: None,
+            weekly_model_has_reset: None,
             weekly_opus_has_reset: None,
         })
     }
@@ -174,7 +175,7 @@ impl CookieStatus {
                 reset_time: None,
                 session_usage: UsageBreakdown::default(),
                 weekly_usage: UsageBreakdown::default(),
-                weekly_sonnet_usage: UsageBreakdown::default(),
+                weekly_model_usage: UsageBreakdown::default(),
                 weekly_opus_usage: UsageBreakdown::default(),
                 ..self
             };
@@ -194,7 +195,7 @@ impl CookieStatus {
         // Legacy window counters removed; reset session buckets conservatively
         self.session_usage = UsageBreakdown::default();
         self.weekly_usage = UsageBreakdown::default();
-        self.weekly_sonnet_usage = UsageBreakdown::default();
+        self.weekly_model_usage = UsageBreakdown::default();
         self.weekly_opus_usage = UsageBreakdown::default();
     }
 
@@ -210,8 +211,8 @@ impl CookieStatus {
         self.weekly_resets_at = ts;
     }
 
-    pub fn set_weekly_sonnet_resets_at(&mut self, ts: Option<i64>) {
-        self.weekly_sonnet_resets_at = ts;
+    pub fn set_weekly_model_resets_at(&mut self, ts: Option<i64>) {
+        self.weekly_model_resets_at = ts;
     }
 
     pub fn set_weekly_opus_resets_at(&mut self, ts: Option<i64>) {
@@ -240,6 +241,14 @@ impl CookieStatus {
                     .sonnet_output_tokens
                     .saturating_add(output);
             }
+            ModelFamily::Fable => {
+                self.session_usage.fable_input_tokens =
+                    self.session_usage.fable_input_tokens.saturating_add(input);
+                self.session_usage.fable_output_tokens = self
+                    .session_usage
+                    .fable_output_tokens
+                    .saturating_add(output);
+            }
             ModelFamily::Opus => {
                 self.session_usage.opus_input_tokens =
                     self.session_usage.opus_input_tokens.saturating_add(input);
@@ -262,23 +271,29 @@ impl CookieStatus {
                     .weekly_usage
                     .sonnet_output_tokens
                     .saturating_add(output);
+            }
+            ModelFamily::Fable => {
+                self.weekly_usage.fable_input_tokens =
+                    self.weekly_usage.fable_input_tokens.saturating_add(input);
+                self.weekly_usage.fable_output_tokens =
+                    self.weekly_usage.fable_output_tokens.saturating_add(output);
 
-                // weekly_sonnet bucket (only sonnet contributes)
-                self.weekly_sonnet_usage.total_input_tokens = self
-                    .weekly_sonnet_usage
+                // The scoped weekly model allowance currently belongs to Fable.
+                self.weekly_model_usage.total_input_tokens = self
+                    .weekly_model_usage
                     .total_input_tokens
                     .saturating_add(input);
-                self.weekly_sonnet_usage.total_output_tokens = self
-                    .weekly_sonnet_usage
+                self.weekly_model_usage.total_output_tokens = self
+                    .weekly_model_usage
                     .total_output_tokens
                     .saturating_add(output);
-                self.weekly_sonnet_usage.sonnet_input_tokens = self
-                    .weekly_sonnet_usage
-                    .sonnet_input_tokens
+                self.weekly_model_usage.fable_input_tokens = self
+                    .weekly_model_usage
+                    .fable_input_tokens
                     .saturating_add(input);
-                self.weekly_sonnet_usage.sonnet_output_tokens = self
-                    .weekly_sonnet_usage
-                    .sonnet_output_tokens
+                self.weekly_model_usage.fable_output_tokens = self
+                    .weekly_model_usage
+                    .fable_output_tokens
                     .saturating_add(output);
             }
             ModelFamily::Opus => {
@@ -326,6 +341,14 @@ impl CookieStatus {
                 self.lifetime_usage.sonnet_output_tokens = self
                     .lifetime_usage
                     .sonnet_output_tokens
+                    .saturating_add(output);
+            }
+            ModelFamily::Fable => {
+                self.lifetime_usage.fable_input_tokens =
+                    self.lifetime_usage.fable_input_tokens.saturating_add(input);
+                self.lifetime_usage.fable_output_tokens = self
+                    .lifetime_usage
+                    .fable_output_tokens
                     .saturating_add(output);
             }
             ModelFamily::Opus => {

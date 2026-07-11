@@ -8,6 +8,15 @@ use serde::{Deserialize, Serialize};
 pub use usage::UsageBreakdown;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct QuotaWindowApi {
+    pub utilization: Option<f64>,
+    pub resets_at: Option<String>,
+    pub is_active: Option<bool>,
+    pub severity: Option<String>,
+    pub scope: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct CookieStatusApi {
     pub cookie: String,
     #[serde(default)]
@@ -18,18 +27,15 @@ pub struct CookieStatusApi {
     pub session_usage: UsageBreakdown,
     #[serde(default)]
     pub weekly_usage: UsageBreakdown,
-    #[serde(default)]
-    pub weekly_sonnet_usage: UsageBreakdown,
+    #[serde(default, alias = "weekly_sonnet_usage")]
+    pub weekly_model_usage: UsageBreakdown,
     #[serde(default)]
     pub weekly_opus_usage: UsageBreakdown,
     #[serde(default)]
     pub lifetime_usage: UsageBreakdown,
-    pub session_utilization: Option<f64>,
-    pub seven_day_utilization: Option<f64>,
-    pub seven_day_sonnet_utilization: Option<f64>,
-    pub session_resets_at: Option<String>,
-    pub seven_day_resets_at: Option<String>,
-    pub seven_day_sonnet_resets_at: Option<String>,
+    pub session_quota: Option<QuotaWindowApi>,
+    pub weekly_quota: Option<QuotaWindowApi>,
+    pub model_quota: Option<QuotaWindowApi>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

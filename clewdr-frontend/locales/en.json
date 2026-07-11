@@ -71,6 +71,7 @@
       "cooldownFull": "Full cooldown",
       "cooldownOpus": "Opus cooldown",
       "cooldownSonnet": "Sonnet cooldown",
+      "cooldownModel": "Fable scoped cooldown",
       "unknownReset": "Unknown reset time",
       "reasons": {
         "freAccount": "Free account",
@@ -93,12 +94,15 @@
       "opusOutput": "Opus output tokens"
     },
     "quota": {
-      "session": "Session utilization",
-      "sevenDay": "7-day utilization",
-      "sevenDaySonnet": "7-day Sonnet utilization",
-      "sevenDayOpus": "7-day Opus utilization",
-      "total": "Total usage",
-      "resetsAt": "Resets at"
+      "session": "5-hour session",
+      "sevenDay": "7-day total",
+      "modelScoped": "7-day model allowance",
+      "windowHeader": "Allowance window",
+      "usageHeader": "Actual usage",
+      "resetHeader": "Reset time (Beijing)",
+      "inactive": "{{percent}}, currently inactive",
+      "remaining": "{{percent}}, about {{remaining}} remaining",
+      "noReset": "None"
     },
     "meta": {
       "summary": "Details"

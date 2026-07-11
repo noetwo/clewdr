@@ -112,11 +112,10 @@ impl RouterBuilder {
         self
     }
 
-    /// Sets up routes for OpenAI compatible endpoints
+    /// Sets up routes for OpenAI compatible Claude Web endpoints
     fn route_claude_web_oai_endpoints(mut self) -> Self {
-        let router = Router::new()
+        let chat_router = Router::new()
             .route("/v1/chat/completions", post(api_claude_web))
-            .route("/v1/models", get(api_get_models))
             .layer(
                 ServiceBuilder::new()
                     .layer(from_extractor::<RequireBearerAuth>())
@@ -126,15 +125,22 @@ impl RouterBuilder {
                     .layer(map_response(check_overloaded)),
             )
             .with_state(self.claude_providers.web());
-        self.inner = self.inner.merge(router);
+        let models_router = Router::new()
+            .route("/v1/models", get(api_get_web_models))
+            .layer(
+                ServiceBuilder::new()
+                    .layer(from_extractor::<RequireBearerAuth>())
+                    .layer(CompressionLayer::new()),
+            )
+            .with_state(self.cookie_actor_handle.clone());
+        self.inner = self.inner.merge(chat_router).merge(models_router);
         self
     }
 
-    /// Sets up routes for OpenAI compatible endpoints
+    /// Sets up routes for OpenAI compatible Claude Code endpoints
     fn route_claude_code_oai_endpoints(mut self) -> Self {
-        let router = Router::new()
+        let chat_router = Router::new()
             .route("/code/v1/chat/completions", post(api_claude_code))
-            .route("/code/v1/models", get(api_get_models))
             .layer(
                 ServiceBuilder::new()
                     .layer(from_extractor::<RequireBearerAuth>())
@@ -142,7 +148,15 @@ impl RouterBuilder {
                     .layer(map_response(to_oai)),
             )
             .with_state(self.claude_providers.code());
-        self.inner = self.inner.merge(router);
+        let models_router = Router::new()
+            .route("/code/v1/models", get(api_get_code_models))
+            .layer(
+                ServiceBuilder::new()
+                    .layer(from_extractor::<RequireBearerAuth>())
+                    .layer(CompressionLayer::new()),
+            )
+            .with_state(self.cookie_actor_handle.clone());
+        self.inner = self.inner.merge(chat_router).merge(models_router);
         self
     }
 

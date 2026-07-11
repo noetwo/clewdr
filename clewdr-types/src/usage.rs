@@ -14,6 +14,10 @@ pub struct UsageBreakdown {
     pub opus_input_tokens: u64,
     #[serde(default)]
     pub opus_output_tokens: u64,
+    #[serde(default)]
+    pub fable_input_tokens: u64,
+    #[serde(default)]
+    pub fable_output_tokens: u64,
 }
 
 impl UsageBreakdown {
@@ -24,5 +28,7 @@ impl UsageBreakdown {
             || self.sonnet_output_tokens > 0
             || self.opus_input_tokens > 0
             || self.opus_output_tokens > 0
+            || self.fable_input_tokens > 0
+            || self.fable_output_tokens > 0
     }
 }

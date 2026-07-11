@@ -22,6 +22,8 @@ use crate::{
     claude_web_state::ClaudeWebState,
     config::{CLEWDR_CONFIG, CookieStatus},
     services::cookie_actor::CookieActorHandle,
+    types::model::AvailableModel,
+    types::usage::{QuotaSummary, extract_quota_summary},
 };
 
 /// Cache entry for cookie status responses
@@ -74,6 +76,7 @@ pub async fn api_post_cookie(
             info!("Cookie submitted successfully");
             // Clear cache to ensure fresh data on next request
             COOKIES_CACHE.invalidate(COOKIE_STATUS_CACHE_KEY);
+            MODELS_CACHE.invalidate_all();
             info!("Cookie status cache invalidated after adding new cookie");
             Ok(StatusCode::OK)
         }
@@ -202,6 +205,7 @@ pub async fn api_delete_cookie(
             info!("Cookie deleted successfully: {}", c.cookie);
             // Clear cache to ensure fresh data on next request
             COOKIES_CACHE.invalidate(COOKIE_STATUS_CACHE_KEY);
+            MODELS_CACHE.invalidate_all();
             info!("Cookie status cache invalidated");
             Ok(StatusCode::NO_CONTENT)
         }
@@ -239,53 +243,131 @@ pub async fn api_auth(AuthBearer(t): AuthBearer) -> StatusCode {
     StatusCode::OK
 }
 
-const MODEL_LIST: [&str; 26] = [
-    "claude-3-7-sonnet-20250219",
-    "claude-3-7-sonnet-20250219-thinking",
-    "claude-sonnet-4-20250514",
-    "claude-sonnet-4-20250514-thinking",
-    "claude-sonnet-4-20250514-1M",
-    "claude-sonnet-4-20250514-1M-thinking",
-    "claude-sonnet-4-5-20250929",
-    "claude-sonnet-4-5-20250929-thinking",
-    "claude-sonnet-4-5-20250929-1M",
-    "claude-sonnet-4-5-20250929-1M-thinking",
-    "claude-sonnet-4-6",
-    "claude-sonnet-4-6-thinking",
-    "claude-sonnet-4-6-1M",
-    "claude-sonnet-4-6-1M-thinking",
-    "claude-opus-4-20250514",
-    "claude-opus-4-20250514-thinking",
-    "claude-opus-4-1-20250805",
-    "claude-opus-4-1-20250805-thinking",
-    "claude-opus-4-5-20251101",
-    "claude-opus-4-5-20251101-thinking",
-    "claude-opus-4-5",
-    "claude-opus-4-5-thinking",
+const FALLBACK_MODEL_LIST: [&str; 7] = [
+    "claude-fable-5",
+    "claude-sonnet-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
     "claude-opus-4-6",
-    "claude-opus-4-6-thinking",
-    "claude-opus-4-6-1M",
-    "claude-opus-4-6-1M-thinking",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
 ];
 
-/// API endpoint to get the list of available models
-/// Retrieves the list of models from the configuration
-pub async fn api_get_models() -> Json<Value> {
-    let data: Vec<Value> = MODEL_LIST
+const WEB_MODELS_CACHE_KEY: &str = "web_models";
+const CODE_MODELS_CACHE_KEY: &str = "code_models";
+
+static MODELS_CACHE: LazyLock<Cache<String, Value>> = LazyLock::new(|| {
+    Cache::builder()
+        .max_capacity(2)
+        .time_to_live(Duration::from_secs(300))
+        .build()
+});
+
+fn fallback_models() -> Vec<AvailableModel> {
+    FALLBACK_MODEL_LIST
         .iter()
-        .map(|model| {
-            json!({
-                "id": model,
-                "object": "model",
-                "created": 0,
-                "owned_by": "clewdr",
-            })
+        .map(|id| AvailableModel {
+            id: (*id).to_string(),
+            ..Default::default()
         })
-        .collect::<Vec<_>>();
-    Json(json!({
+        .collect()
+}
+
+fn keep_legacy_thinking_alias(model: &str) -> bool {
+    matches!(model, "claude-sonnet-4-6" | "claude-opus-4-6")
+}
+
+fn models_response(mut models: Vec<AvailableModel>) -> Value {
+    if models.is_empty() {
+        models = fallback_models();
+    }
+    models.sort_by(|left, right| {
+        left.overflow
+            .cmp(&right.overflow)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    let mut seen = std::collections::HashSet::new();
+    let mut data = Vec::new();
+    for model in models {
+        if !seen.insert(model.id.clone()) {
+            continue;
+        }
+        let base_id = model.id.clone();
+        data.push(model.openai_value());
+        if keep_legacy_thinking_alias(&base_id) {
+            let mut alias = model.openai_value();
+            alias["id"] = json!(format!("{base_id}-thinking"));
+            alias["clewdr_alias_for"] = json!(base_id);
+            data.push(alias);
+        }
+    }
+
+    json!({
         "object": "list",
         "data": data,
+    })
+}
+
+async fn collect_web_models(handle: CookieActorHandle) -> Vec<AvailableModel> {
+    let Ok(status) = handle.get_status().await else {
+        return Vec::new();
+    };
+    let cookies = status.valid.into_iter().chain(status.exhausted);
+    stream::iter(cookies.map(|cookie| {
+        let handle = handle.clone();
+        async move { ClaudeWebState::fetch_web_models(handle, cookie).await }
     }))
+    .buffer_unordered(5)
+    .filter_map(|models| async move { models })
+    .flat_map(|models| stream::iter(models))
+    .collect()
+    .await
+}
+
+async fn collect_code_models(handle: CookieActorHandle) -> Vec<AvailableModel> {
+    let Ok(status) = handle.get_status().await else {
+        return Vec::new();
+    };
+    let cookies = status.valid.into_iter().chain(status.exhausted);
+    stream::iter(cookies.map(|cookie| {
+        let handle = handle.clone();
+        async move {
+            let Ok(mut state) = ClaudeCodeState::from_cookie(handle, cookie) else {
+                return None;
+            };
+            let models = state.fetch_available_models().await.ok();
+            state.return_cookie(None).await;
+            models
+        }
+    }))
+    .buffer_unordered(5)
+    .filter_map(|models| async move { models })
+    .flat_map(|models| stream::iter(models))
+    .collect()
+    .await
+}
+
+pub async fn api_get_web_models(State(handle): State<CookieActorHandle>) -> Json<Value> {
+    if let Some(cached) = MODELS_CACHE.get(WEB_MODELS_CACHE_KEY) {
+        return Json(cached);
+    }
+    let response = models_response(collect_web_models(handle).await);
+    MODELS_CACHE.insert(WEB_MODELS_CACHE_KEY.to_string(), response.clone());
+    Json(response)
+}
+
+pub async fn api_get_code_models(State(handle): State<CookieActorHandle>) -> Json<Value> {
+    if let Some(cached) = MODELS_CACHE.get(CODE_MODELS_CACHE_KEY) {
+        return Json(cached);
+    }
+    let mut models = collect_code_models(handle.clone()).await;
+    if models.is_empty() {
+        models = collect_web_models(handle).await;
+    }
+    let response = models_response(models);
+    MODELS_CACHE.insert(CODE_MODELS_CACHE_KEY.to_string(), response.clone());
+    Json(response)
 }
 
 // ------------------------------
@@ -301,21 +383,11 @@ async fn augment_utilization(cookies: Vec<CookieStatus>, handle: CookieActorHand
         async move {
             let base = serde_json::to_value(&cookie).unwrap_or(json!({}));
             match fetch_usage_percent(cookie, handle).await {
-                Some((
-                    five_hour,
-                    five_reset,
-                    seven_day,
-                    seven_reset,
-                    seven_day_sonnet,
-                    sonnet_reset,
-                )) => {
+                Some(summary) => {
                     let mut obj = base;
-                    obj["session_utilization"] = json!(five_hour);
-                    obj["session_resets_at"] = json!(five_reset);
-                    obj["seven_day_utilization"] = json!(seven_day);
-                    obj["seven_day_resets_at"] = json!(seven_reset);
-                    obj["seven_day_sonnet_utilization"] = json!(seven_day_sonnet);
-                    obj["seven_day_sonnet_resets_at"] = json!(sonnet_reset);
+                    obj["session_quota"] = json!(summary.session);
+                    obj["weekly_quota"] = json!(summary.weekly);
+                    obj["model_quota"] = json!(summary.model);
                     obj
                 }
                 None => base,
@@ -330,14 +402,7 @@ async fn augment_utilization(cookies: Vec<CookieStatus>, handle: CookieActorHand
 async fn fetch_usage_percent(
     cookie: CookieStatus,
     handle: CookieActorHandle,
-) -> Option<(
-    u32,
-    Option<String>,
-    u32,
-    Option<String>,
-    u32,
-    Option<String>,
-)> {
+) -> Option<QuotaSummary> {
     let oauth_handle = handle.clone();
     let fallback_cookie = cookie.clone();
     let fallback_cookie_name = fallback_cookie.cookie.to_string();
@@ -359,7 +424,7 @@ async fn fetch_usage_percent(
         .await
         .ok()?;
 
-    extract_usage_fields(&usage)
+    extract_quota_summary(&usage)
 }
 
 /// Try the OAuth endpoint (`api.anthropic.com/api/oauth/usage`)
@@ -378,57 +443,4 @@ async fn try_oauth_usage(
             warn!("try_oauth_usage: fetch failed for {}: {}", cookie.cookie, e);
         })
         .map_err(|_| ())
-}
-
-type Usage = Option<(
-    u32,
-    Option<String>,
-    u32,
-    Option<String>,
-    u32,
-    Option<String>,
-)>;
-/// Extract the six usage fields from the usage JSON returned by either endpoint
-fn extract_usage_fields(usage: &serde_json::Value) -> Usage {
-    let five = usage
-        .get("five_hour")
-        .and_then(|o| o.get("utilization"))
-        .and_then(|v| v.as_f64())
-        .map(|v| v.round() as u32)
-        .unwrap_or(0);
-    let five_reset = usage
-        .get("five_hour")
-        .and_then(|o| o.get("resets_at"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let seven = usage
-        .get("seven_day")
-        .and_then(|o| o.get("utilization"))
-        .and_then(|v| v.as_f64())
-        .map(|v| v.round() as u32)
-        .unwrap_or(0);
-    let seven_reset = usage
-        .get("seven_day")
-        .and_then(|o| o.get("resets_at"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let seven_sonnet = usage
-        .get("seven_day_sonnet")
-        .and_then(|o| o.get("utilization"))
-        .and_then(|v| v.as_f64())
-        .map(|v| v.round() as u32)
-        .unwrap_or(0);
-    let sonnet_reset = usage
-        .get("seven_day_sonnet")
-        .and_then(|o| o.get("resets_at"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    Some((
-        five,
-        five_reset,
-        seven,
-        seven_reset,
-        seven_sonnet,
-        sonnet_reset,
-    ))
 }

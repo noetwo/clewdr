@@ -407,6 +407,37 @@ details summary {
 }
 details summary:hover { color: var(--text-dim); }
 
+.quota-table-wrap {
+    width: 100%;
+    overflow-x: auto;
+}
+.quota-table {
+    width: 100%;
+    min-width: 560px;
+    border-collapse: collapse;
+    font-size: 0.75rem;
+}
+.quota-table th,
+.quota-table td {
+    padding: 0.625rem 0.75rem;
+    border-bottom: 1px solid var(--divider);
+    text-align: left;
+    white-space: nowrap;
+}
+.quota-table th {
+    color: var(--text-dim);
+    font-weight: 600;
+}
+.quota-table td {
+    color: var(--text-mute);
+}
+.quota-table td:first-child {
+    color: var(--text);
+}
+.quota-table tbody tr:last-child td {
+    border-bottom: 0;
+}
+
 /* ── Config sections ───────────────────────────────────────────── */
 .config-section {
     padding: 1rem; border-radius: var(--radius);

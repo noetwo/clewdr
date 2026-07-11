@@ -15,7 +15,10 @@ use crate::{
     error::{ClewdrError, WreqSnafu},
     middleware::claude::ClaudeApiFormat,
     services::cookie_actor::CookieActorHandle,
-    types::claude::{CreateMessageParams, Usage},
+    types::{
+        claude::{CreateMessageParams, Usage},
+        model::AvailableModel,
+    },
     utils::build_http_client,
 };
 
@@ -34,6 +37,7 @@ pub struct ClaudeWebState {
     pub org_uuid: Option<String>,
     pub conv_uuid: Option<String>,
     pub capabilities: Vec<String>,
+    pub available_models: Vec<AvailableModel>,
     pub endpoint: Url,
     pub proxy: Option<Proxy>,
     pub api_format: ClaudeApiFormat,
@@ -55,6 +59,7 @@ impl ClaudeWebState {
             conv_uuid: None,
             cookie_header_value: HeaderValue::from_static(""),
             capabilities: Vec::new(),
+            available_models: Vec::new(),
             endpoint: CLEWDR_CONFIG.load().endpoint(),
             proxy: CLEWDR_CONFIG.load().wreq_proxy.to_owned(),
             api_format: ClaudeApiFormat::Claude,
@@ -155,6 +160,8 @@ impl ClaudeWebState {
             crate::config::ModelFamily::Opus
         } else if m.contains("sonnet") {
             crate::config::ModelFamily::Sonnet
+        } else if m.contains("fable") {
+            crate::config::ModelFamily::Fable
         } else {
             crate::config::ModelFamily::Other
         }
@@ -176,6 +183,30 @@ impl ClaudeWebState {
                 warn!("Failed to persist usage statistics: {}", err);
             }
         }
+    }
+
+    /// Fetch account-specific models exposed by the Claude Web bootstrap.
+    pub async fn fetch_web_models(
+        handle: CookieActorHandle,
+        cookie: CookieStatus,
+    ) -> Option<Vec<AvailableModel>> {
+        let mut state = ClaudeWebState::new(handle);
+        state.cookie = Some(cookie.clone());
+        state.proxy = CLEWDR_CONFIG.load().wreq_proxy.to_owned();
+        state.endpoint = CLEWDR_CONFIG.load().endpoint();
+        state.client = Self::build_client(state.proxy.as_ref()).ok()?;
+        state.cookie_header_value =
+            HeaderValue::from_str(cookie.cookie.to_string().as_str()).ok()?;
+
+        if let Err(error) = state.bootstrap().await {
+            warn!(
+                "fetch_web_models: bootstrap failed for {}: {}",
+                cookie.cookie, error
+            );
+            return None;
+        }
+
+        Some(state.available_models)
     }
 
     /// Fetch usage data via the claude.ai web endpoint.

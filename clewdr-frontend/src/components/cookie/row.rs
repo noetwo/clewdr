@@ -6,7 +6,7 @@ use crate::{
     api,
     i18n::use_i18n,
     types::{CookieStatus, Reason, UselessCookie},
-    utils::{self, format_iso, format_timestamp},
+    utils::{self, format_iso_beijing, format_timestamp},
 };
 
 fn confirm_and_delete(cookie: String, deleting: RwSignal<bool>) {
@@ -87,6 +87,14 @@ pub fn ValidRow(cookie: CookieStatus) -> impl IntoView {
 pub fn ExhaustedRow(cookie: CookieStatus) -> impl IntoView {
     let i18n = use_i18n();
     let masked = utils::mask_str(&cookie.cookie, 6);
+    let model_reset = cookie
+        .model_quota
+        .as_ref()
+        .and_then(|quota| quota.resets_at.as_deref());
+    let weekly_reset = cookie
+        .weekly_quota
+        .as_ref()
+        .and_then(|quota| quota.resets_at.as_deref());
 
     let cooldown = if let Some(ts) = cookie.reset_time {
         format!(
@@ -94,17 +102,17 @@ pub fn ExhaustedRow(cookie: CookieStatus) -> impl IntoView {
             i18n.t("cookieStatus.status.cooldownFull"),
             format_timestamp(ts)
         )
-    } else if let Some(ref s) = cookie.seven_day_sonnet_resets_at {
+    } else if let Some(reset) = model_reset {
         format!(
             "{}: {}",
-            i18n.t("cookieStatus.status.cooldownSonnet"),
-            format_iso(s)
+            i18n.t("cookieStatus.status.cooldownModel"),
+            format_iso_beijing(reset)
         )
-    } else if let Some(ref s) = cookie.seven_day_resets_at {
+    } else if let Some(reset) = weekly_reset {
         format!(
             "{}: {}",
             i18n.t("cookieStatus.status.cooldownFull"),
-            format_iso(s)
+            format_iso_beijing(reset)
         )
     } else {
         i18n.t("cookieStatus.status.unknownReset")

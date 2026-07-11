@@ -139,6 +139,8 @@ impl ClaudeWebState {
                                     crate::config::ModelFamily::Opus
                                 } else if m.contains("sonnet") {
                                     crate::config::ModelFamily::Sonnet
+                                } else if m.contains("fable") {
+                                    crate::config::ModelFamily::Fable
                                 } else {
                                     crate::config::ModelFamily::Other
                                 }
@@ -158,6 +160,8 @@ impl ClaudeWebState {
                                 crate::config::ModelFamily::Opus
                             } else if m.contains("sonnet") {
                                 crate::config::ModelFamily::Sonnet
+                            } else if m.contains("fable") {
+                                crate::config::ModelFamily::Fable
                             } else {
                                 crate::config::ModelFamily::Other
                             }

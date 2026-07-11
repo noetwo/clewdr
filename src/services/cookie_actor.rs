@@ -147,9 +147,9 @@ impl CookieActor {
                 now,
             );
             cookie_changed |= reset_if_due(
-                cookie.weekly_sonnet_has_reset,
-                &mut cookie.weekly_sonnet_resets_at,
-                &mut cookie.weekly_sonnet_usage,
+                cookie.weekly_model_has_reset,
+                &mut cookie.weekly_model_resets_at,
+                &mut cookie.weekly_model_usage,
                 WEEKLY_WINDOW_SECS,
                 now,
             );

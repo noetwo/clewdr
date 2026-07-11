@@ -9,6 +9,7 @@ use crate::{
     claude_web_state::ClaudeWebState,
     config::{CLEWDR_CONFIG, Reason},
     error::{CheckClaudeErr, ClewdrError, WreqSnafu},
+    types::model::parse_web_models,
     utils::print_out_json,
 };
 
@@ -76,6 +77,10 @@ impl ClaudeWebState {
                     .map(|c| c.to_string())
                     .collect::<Vec<_>>()
             })
+            .unwrap_or_default();
+        self.available_models = boot_acc_info
+            .get("claude_ai_bootstrap_models_config")
+            .map(parse_web_models)
             .unwrap_or_default();
         if !self.is_pro() && CLEWDR_CONFIG.load().skip_non_pro {
             return Err(Reason::Free.into());

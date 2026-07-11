@@ -11,9 +11,23 @@ pub fn format_timestamp(ts: i64) -> String {
     to_locale_string(&date)
 }
 
-pub fn format_iso(iso: &str) -> String {
+pub fn format_iso_beijing(iso: &str) -> String {
     let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(iso));
-    to_locale_string(&date)
+    if date.get_time().is_nan() {
+        return "N/A".into();
+    }
+    let beijing = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(
+        date.get_time() + 8.0 * 60.0 * 60.0 * 1000.0,
+    ));
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        beijing.get_utc_full_year(),
+        beijing.get_utc_month() + 1,
+        beijing.get_utc_date(),
+        beijing.get_utc_hours(),
+        beijing.get_utc_minutes(),
+        beijing.get_utc_seconds(),
+    )
 }
 
 fn to_locale_string(date: &js_sys::Date) -> String {

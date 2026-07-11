@@ -15,7 +15,11 @@ use crate::{
     config::{CLAUDE_CODE_USER_AGENT, CLEWDR_CONFIG, ModelFamily},
     error::{CheckClaudeErr, ClewdrError, WreqSnafu},
     services::cookie_actor::CookieActorHandle,
-    types::claude::{CountMessageTokensResponse, CreateMessageParams},
+    types::{
+        claude::{CountMessageTokensResponse, CreateMessageParams},
+        model::AvailableModel,
+        usage::extract_quota_summary,
+    },
 };
 
 pub(super) const CLAUDE_BETA_BASE: &str = "oauth-2025-04-20";
@@ -110,11 +114,8 @@ impl ClaudeCodeState {
     pub async fn send_chat(
         &mut self,
         access_token: String,
-        mut p: CreateMessageParams,
+        p: CreateMessageParams,
     ) -> Result<axum::response::Response, ClewdrError> {
-        if let Some(stripped) = p.model.strip_suffix("-1M") {
-            p.model = stripped.to_string();
-        }
         let model_family = Self::classify_model(&p.model);
         let response = self.execute_claude_request(&access_token, &p).await?;
         self.handle_success_response(response, model_family).await
@@ -206,6 +207,68 @@ impl ClaudeCodeState {
             })
     }
 
+    pub async fn fetch_available_models(&mut self) -> Result<Vec<AvailableModel>, ClewdrError> {
+        match self.check_token() {
+            TokenStatus::None => {
+                let org = self.get_organization().await?;
+                let code = self.exchange_code(&org).await?;
+                self.exchange_token(code).await?;
+            }
+            TokenStatus::Expired => {
+                self.refresh_token().await?;
+            }
+            TokenStatus::Valid => {}
+        }
+
+        let access_token = self
+            .cookie
+            .as_ref()
+            .and_then(|cookie| cookie.token.as_ref())
+            .ok_or(ClewdrError::UnexpectedNone {
+                msg: "No access token available",
+            })?
+            .access_token
+            .to_owned();
+
+        let value = self
+            .client
+            .request(
+                Method::GET,
+                self.endpoint
+                    .join("v1/models")
+                    .map_err(|error| ClewdrError::Whatever {
+                        message: format!("Parse URL error: {error}"),
+                        source: Some(Box::new(error)),
+                    })?
+                    .to_string(),
+            )
+            .bearer_auth(access_token)
+            .header(ACCEPT, "application/json")
+            .header(USER_AGENT, CLAUDE_CODE_USER_AGENT)
+            .header("anthropic-beta", CLAUDE_BETA_BASE)
+            .header("anthropic-version", CLAUDE_API_VERSION)
+            .send()
+            .await
+            .context(WreqSnafu {
+                msg: "Failed to fetch available models",
+            })?
+            .check_claude()
+            .await?
+            .json::<serde_json::Value>()
+            .await
+            .context(WreqSnafu {
+                msg: "Failed to parse available models",
+            })?;
+
+        Ok(value
+            .get("data")
+            .and_then(|data| data.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|model| serde_json::from_value(model.clone()).ok())
+            .collect())
+    }
+
     pub async fn try_count_tokens(
         &mut self,
         p: CreateMessageParams,
@@ -287,10 +350,6 @@ impl ClaudeCodeState {
         allow_fallback: bool,
     ) -> Result<axum::response::Response, ClewdrError> {
         p.stream = Some(false);
-        if let Some(stripped) = p.model.strip_suffix("-1M") {
-            p.model = stripped.to_string();
-        }
-
         match self
             .execute_claude_count_tokens_request(&access_token, &p)
             .await
@@ -500,6 +559,8 @@ impl ClaudeCodeState {
             ModelFamily::Opus
         } else if m.contains("sonnet") {
             ModelFamily::Sonnet
+        } else if m.contains("fable") {
+            ModelFamily::Fable
         } else {
             ModelFamily::Other
         }
@@ -522,23 +583,23 @@ impl ClaudeCodeState {
 
         let session_tracked = tracked(cookie.session_has_reset);
         let weekly_tracked = tracked(cookie.weekly_has_reset);
-        let sonnet_tracked = tracked(cookie.weekly_sonnet_has_reset);
+        let model_tracked = tracked(cookie.weekly_model_has_reset);
 
         let session_due = session_tracked && due(cookie.session_resets_at);
         let weekly_due = weekly_tracked && due(cookie.weekly_resets_at);
-        let sonnet_due = sonnet_tracked && due(cookie.weekly_sonnet_resets_at);
+        let model_due = model_tracked && due(cookie.weekly_model_resets_at);
 
         let need_probe_unknown = unknown(cookie.session_has_reset)
             || unknown(cookie.weekly_has_reset)
-            || unknown(cookie.weekly_sonnet_has_reset);
-        let any_due = session_due || weekly_due || sonnet_due;
+            || unknown(cookie.weekly_model_has_reset);
+        let any_due = session_due || weekly_due || model_due;
 
         if !(need_probe_unknown || any_due) {
             return;
         }
 
         cookie.resets_last_checked_at = Some(now);
-        if let Some((sess, week, sonnet)) = Self::fetch_usage_resets(cookie, handle).await {
+        if let Some((sess, week, model)) = Self::fetch_usage_resets(cookie, handle).await {
             // Unknown -> decide track/not-track
             if unknown(cookie.session_has_reset) {
                 cookie.session_has_reset = Some(sess.is_some());
@@ -546,8 +607,8 @@ impl ClaudeCodeState {
             if unknown(cookie.weekly_has_reset) {
                 cookie.weekly_has_reset = Some(week.is_some());
             }
-            if unknown(cookie.weekly_sonnet_has_reset) {
-                cookie.weekly_sonnet_has_reset = Some(sonnet.is_some());
+            if unknown(cookie.weekly_model_has_reset) {
+                cookie.weekly_model_has_reset = Some(model.is_some());
             }
 
             // Handle due tracked windows: reset usage then update boundaries if provided
@@ -557,8 +618,8 @@ impl ClaudeCodeState {
             if weekly_due {
                 cookie.weekly_usage = crate::config::UsageBreakdown::default();
             }
-            if sonnet_due {
-                cookie.weekly_sonnet_usage = crate::config::UsageBreakdown::default();
+            if model_due {
+                cookie.weekly_model_usage = crate::config::UsageBreakdown::default();
             }
 
             // Update/reset boundaries for tracked windows
@@ -579,12 +640,12 @@ impl ClaudeCodeState {
                     cookie.weekly_resets_at = None;
                 }
             }
-            if cookie.weekly_sonnet_has_reset == Some(true) {
-                if let Some(ts) = sonnet {
-                    cookie.weekly_sonnet_resets_at = Some(ts);
+            if cookie.weekly_model_has_reset == Some(true) {
+                if let Some(ts) = model {
+                    cookie.weekly_model_resets_at = Some(ts);
                 } else {
-                    cookie.weekly_sonnet_has_reset = Some(false);
-                    cookie.weekly_sonnet_resets_at = None;
+                    cookie.weekly_model_has_reset = Some(false);
+                    cookie.weekly_model_resets_at = None;
                 }
             }
         } else {
@@ -597,9 +658,9 @@ impl ClaudeCodeState {
                 cookie.weekly_usage = crate::config::UsageBreakdown::default();
                 cookie.weekly_resets_at = Some(now + WEEKLY_WINDOW_SECS);
             }
-            if sonnet_due && sonnet_tracked {
-                cookie.weekly_sonnet_usage = crate::config::UsageBreakdown::default();
-                cookie.weekly_sonnet_resets_at = Some(now + WEEKLY_WINDOW_SECS);
+            if model_due && model_tracked {
+                cookie.weekly_model_usage = crate::config::UsageBreakdown::default();
+                cookie.weekly_model_resets_at = Some(now + WEEKLY_WINDOW_SECS);
             }
         }
     }
@@ -615,19 +676,18 @@ impl ClaudeCodeState {
             *cookie = updated;
         }
 
-        let parse_reset = |obj_key: &str| -> Option<i64> {
-            usage
-                .get(obj_key)
-                .and_then(|o| o.get("resets_at"))
-                .and_then(|v| v.as_str())
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        let summary = extract_quota_summary(&usage)?;
+        let parse_reset = |window: Option<clewdr_types::QuotaWindowApi>| -> Option<i64> {
+            window
+                .and_then(|window| window.resets_at)
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())
                 .map(|dt| dt.timestamp())
         };
 
         Some((
-            parse_reset("five_hour"),
-            parse_reset("seven_day"),
-            parse_reset("seven_day_sonnet"),
+            parse_reset(summary.session),
+            parse_reset(summary.weekly),
+            parse_reset(summary.model),
         ))
     }
 

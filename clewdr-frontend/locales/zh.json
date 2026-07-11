@@ -71,6 +71,7 @@
       "cooldownFull": "全局冷却",
       "cooldownOpus": "Opus 冷却",
       "cooldownSonnet": "Sonnet 冷却",
+      "cooldownModel": "Fable 专项冷却",
       "unknownReset": "未知重置时间",
       "reasons": {
         "freAccount": "免费账户",
@@ -93,12 +94,15 @@
       "opusOutput": "Opus 输出 Token"
     },
     "quota": {
-      "session": "会话配额使用",
-      "sevenDay": "7日配额使用",
-      "sevenDaySonnet": "7日 Sonnet 配额使用",
-      "sevenDayOpus": "7日Opus配额使用",
-      "total": "累计用量",
-      "resetsAt": "重置于"
+      "session": "5 小时会话",
+      "sevenDay": "7 天总额度",
+      "modelScoped": "7 天模型专项额度",
+      "windowHeader": "额度窗口",
+      "usageHeader": "实际使用",
+      "resetHeader": "重置时间（北京时间）",
+      "inactive": "{{percent}}，当前未激活",
+      "remaining": "{{percent}}，约剩 {{remaining}}",
+      "noReset": "暂无"
     },
     "meta": {
       "summary": "查看详情"
